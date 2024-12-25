@@ -1,14 +1,16 @@
 # fastest (single-threaded) echo server ever
 
-NOTE: benches done over localhost, 100 connections, 8 workers, see [Makefile](Makefile) for command.
+NOTE: benches done over localhost and WAN, 100 connections, 8 workers, see [Makefile](Makefile) for command.
 
 ## runGoro
 - goroutines for each connection
 - multi-threaded
 
-Bench:
 ```
+Local:
 Packet rate estimate: 1507283.6↓, 1502879.4↑ (8↓, 45↑ TCP MSS/op)
+WAN:
+Packet rate estimate: 6984.4↓, 8577.9↑ (2↓, 43↑ TCP MSS/op)
 ```
 
 ## runEpollReadNonblockingWriteBlocking
@@ -17,9 +19,11 @@ Packet rate estimate: 1507283.6↓, 1502879.4↑ (8↓, 45↑ TCP MSS/op)
 - batch reads
 - blocking writes, loop is used because either both read and write always block or both of them dont block, to batch reads we have to use nonblocking reads, so both are nonblocking
 
-Bench:
 ```
+Local:
 Packet rate estimate: 1117992.0↓, 1080027.2↑ (10↓, 45↑ TCP MSS/op)
+WAN:
+Packet rate estimate: 4635.3↓, 8570.7↑ (2↓, 44↑ TCP MSS/op)
 ```
 
 ## runEpollFullNonblocking !!!
@@ -30,7 +34,9 @@ Packet rate estimate: 1117992.0↓, 1080027.2↑ (10↓, 45↑ TCP MSS/op)
 
 I saw no implementations using both nonblocking reads and writes and batching reads. Batching over accept and reads are used to not go to epoll while there are ready data to read.
 
-Bench:
 ```
+Local:
 Packet rate estimate: 1658053.9↓, 1555625.9↑ (12↓, 45↑ TCP MSS/op)
+WAN:
+Packet rate estimate: 6772.0↓, 8709.6↑ (2↓, 43↑ TCP MSS/op)
 ```
