@@ -6,16 +6,20 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
 	"syscall"
+	"time"
 	"unsafe"
 
+	"github.com/felixge/fgprof"
 	"golang.org/x/sys/unix"
 )
 
 var (
-	port = flag.Int("port", 3333, "Port to accept connections on.")
-	host = flag.String("host", "0.0.0.0", "Host or IP to bind to")
+	bufsize = flag.Int("bufsize", 4096, "Buffer size to allocate for each read.")
+	port    = flag.Int("port", 3333, "Port to accept connections on.")
+	host    = flag.String("host", "0.0.0.0", "Host or IP to bind to")
 )
 
 func runEpollReadNonblockingWriteBlocking() error {
@@ -66,7 +70,7 @@ func runEpollReadNonblockingWriteBlocking() error {
 	if _, err := unix.FcntlInt(uintptr(srvFD), unix.F_SETFL, unix.O_NONBLOCK); err != nil {
 		return fmt.Errorf("fcntl: %w", err)
 	}
-	buf := make([]byte, 4096)
+	buf := make([]byte, *bufsize)
 	events := []unix.PollFd{{int32(srvFD), unix.EPOLLIN, 0}}
 	for {
 		// fmt.Println(events)
@@ -188,13 +192,8 @@ func runEpollFullNonblocking() error {
 		laddr       net.Addr
 		raddr       net.Addr
 	}
-	// our own buf with len read, since we cant just use slice because it must have full length for syscall.Read
-	// TODO: bypass passing slice to syscall so we can use len directly
-	type mybuf struct {
-		b []byte
-		n int
-	}
-	bufs := []mybuf{}
+	freeblocks := [][]byte{}
+	bufs := [][][]byte{} // for each conn, for each read, buffer we have read in single syscall
 	srvFD := (*struct {
 		fd *netFD
 		lc net.ListenConfig
@@ -203,12 +202,31 @@ func runEpollFullNonblocking() error {
 		return fmt.Errorf("fcntl: %w", err)
 	}
 	events := []unix.PollFd{{int32(srvFD), unix.EPOLLIN, 0}}
+	debug := func(dir string) {
+		log := func(s ...any) { fmt.Fprint(os.Stderr, s...) }
+		log(dir, " EVENTS ", events, " FREEBLOCKS ", len(freeblocks), " [")
+		for i := range bufs {
+			if i != 0 {
+				log(" ")
+			}
+			log("[")
+			for j := range bufs[i] {
+				if j != 0 {
+					log(" ")
+				}
+				log(len(bufs[i][j]))
+			}
+			log("]")
+		}
+		log("]\n")
+	}
+	_ = debug
 	for {
-		// fmt.Println(events)
+		// debug(">")
 		if _, err := unix.Ppoll(events, nil, nil); err != nil {
 			return fmt.Errorf("poll: %#v", err)
 		}
-		// fmt.Println(events)
+		// debug("<")
 
 		// TODO: is it x/sys/unix leaves us with events slice or we really reuse it all the way along?
 		if events[0].Revents&unix.POLLIN != 0 {
@@ -227,9 +245,7 @@ func runEpollFullNonblocking() error {
 				// defer conn.Close()
 
 				if len(bufs) == len(events)-1 {
-					bufs = append(bufs, mybuf{make([]byte, 4096), 0})
-				} else {
-					bufs[len(bufs)-1].n = 0
+					bufs = append(bufs, [][]byte{})
 				}
 				events = append(events, unix.PollFd{int32(nfd), unix.POLLIN, 0})
 				events[0].Revents &^= unix.POLLIN
@@ -239,8 +255,8 @@ func runEpollFullNonblocking() error {
 			fd := events[i].Fd
 			// TODO: read before write handling does not work, why?
 			if events[i].Revents&unix.POLLOUT != 0 {
-				data := bufs[i-1].b[:bufs[i-1].n]
-				if n, err := syscall.Write(int(fd), data); err != nil {
+				if n, err := unix.Writev(int(fd), bufs[i-1]); err != nil {
+					// debug("=")
 					// log.Printf("write %d %#v\n", fd, err)
 					if err == syscall.ECONNRESET {
 						goto CLOSE
@@ -249,27 +265,43 @@ func runEpollFullNonblocking() error {
 				} else if n == 0 {
 					goto CLOSE
 				}
-				bufs[i-1].n = 0
+				freeblocks = append(freeblocks, bufs[i-1]...)
+				bufs[i-1] = bufs[i-1][:0]
 				events[i].Events &^= unix.POLLOUT
 				events[i].Revents &^= unix.POLLOUT
 			}
 			if events[i].Revents&unix.POLLIN != 0 {
-				for len(bufs[i-1].b) > bufs[i-1].n {
-					n, err := syscall.Read(int(fd), bufs[i-1].b[bufs[i-1].n:])
+				const _maxreads = 8 // max reads per conn
+
+				for len(bufs[i-1]) < _maxreads {
+					var buf []byte
+					if k := len(freeblocks); k > 0 {
+						buf = freeblocks[k-1]
+						freeblocks = freeblocks[:k-1]
+					} else {
+						buf = make([]byte, *bufsize)
+					}
+
+					n, err := syscall.Read(int(fd), buf[:*bufsize])
 					if err != nil {
+						freeblocks = append(freeblocks, buf)
 						// log.Printf("read %d %#v\n", fd, err)
 						if err == syscall.EWOULDBLOCK {
 							break
 						}
 						return fmt.Errorf("read: %w", err)
 					} else if n == 0 {
+						freeblocks = append(freeblocks, buf)
 						goto CLOSE
 					}
-					// log.Println("Read new data from connection", string(buf[fd][nn[fd]:][:n]))
-					bufs[i-1].n += n
+					// log.Println("Read new data from connection", string(buf[:n]))
+					bufs[i-1] = append(bufs[i-1], buf[:n])
 				}
-				events[i].Events |= unix.POLLOUT
 				events[i].Revents &^= unix.POLLIN
+				events[i].Events |= unix.POLLOUT
+				if len(bufs[i-1]) < _maxreads {
+					events[i].Events |= unix.POLLIN
+				}
 			}
 			if events[i].Revents != 0 {
 				// unprocessed events left
@@ -279,6 +311,7 @@ func runEpollFullNonblocking() error {
 		CLOSE:
 			// log.Println("Closed connection")
 			events = append(events[:i], events[i+1:]...)
+			freeblocks = append(freeblocks, bufs[i-1]...)
 			bufs = append(bufs[:i-1], bufs[i:]...)
 			i--
 		}
@@ -302,7 +335,7 @@ func runGoro() error {
 		go func() {
 			// log.Println("Accepted new connection.")
 
-			buf := make([]byte, 1024)
+			buf := make([]byte, *bufsize)
 			for {
 				size, err := conn.Read(buf)
 				if err != nil {
@@ -322,10 +355,21 @@ func main() {
 	log.SetFlags(0)
 	flag.Parse()
 
+	f, err := os.Create("fgprof.pprof")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	stop := fgprof.Start(f, fgprof.FormatPprof)
+	go func() {
+		<-time.After(time.Second * 10)
+		stop()
+	}()
+
 	if err :=
-		runEpollReadNonblockingWriteBlocking();
-	// runGoro();
-	// runEpollFullNonblocking();
+		// runGoro();
+		// runEpollReadNonblockingWriteBlocking();
+		runEpollFullNonblocking();
 	//
 	err != nil {
 		log.Println(err.Error())

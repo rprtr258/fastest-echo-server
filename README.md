@@ -1,6 +1,6 @@
 # fastest (single-threaded) echo server ever
 
-NOTE: benches done over localhost.
+NOTE: benches done over localhost, 100 connections, 8 workers, see [Makefile](Makefile) for command.
 
 ## runGoro
 - goroutines for each connection
@@ -8,7 +8,7 @@ NOTE: benches done over localhost.
 
 Bench:
 ```
-Packet rate estimate: 232023.4↓, 177438.7↑ (1↓, 45↑ TCP MSS/op)
+Packet rate estimate: 1507283.6↓, 1502879.4↑ (8↓, 45↑ TCP MSS/op)
 ```
 
 ## runEpollReadNonblockingWriteBlocking
@@ -19,7 +19,7 @@ Packet rate estimate: 232023.4↓, 177438.7↑ (1↓, 45↑ TCP MSS/op)
 
 Bench:
 ```
-Packet rate estimate: 1250023.9↓, 1233377.8↑ (11↓, 45↑ TCP MSS/op)
+Packet rate estimate: 1117992.0↓, 1080027.2↑ (10↓, 45↑ TCP MSS/op)
 ```
 
 ## runEpollFullNonblocking !!!
@@ -32,5 +32,5 @@ I saw no implementations using both nonblocking reads and writes and batching re
 
 Bench:
 ```
-Packet rate estimate: 1433477.7↓, 1413431.4↑ (11↓, 45↑ TCP MSS/op)
+Packet rate estimate: 1658053.9↓, 1555625.9↑ (12↓, 45↑ TCP MSS/op)
 ```
