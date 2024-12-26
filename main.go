@@ -23,6 +23,8 @@ var (
 )
 
 func runEpollReadNonblockingWriteBlocking() error {
+	flag.Parse()
+
 	addr, err := netip.ParseAddrPort(*host + ":" + strconv.Itoa(*port))
 	if err != nil {
 		return err
@@ -152,6 +154,8 @@ func runEpollReadNonblockingWriteBlocking() error {
 }
 
 func runEpollFullNonblocking() error {
+	flag.Parse()
+
 	addr, err := netip.ParseAddrPort(*host + ":" + strconv.Itoa(*port))
 	if err != nil {
 		return err
@@ -319,6 +323,8 @@ func runEpollFullNonblocking() error {
 }
 
 func runGoro() error {
+	flag.Parse()
+
 	l, err := net.Listen("tcp", *host+":"+strconv.Itoa(*port))
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
@@ -353,7 +359,6 @@ func runGoro() error {
 
 func main() {
 	log.SetFlags(0)
-	flag.Parse()
 
 	f, err := os.Create("fgprof.pprof")
 	if err != nil {
@@ -369,6 +374,8 @@ func main() {
 	if err :=
 		// runGoro();
 		// runEpollReadNonblockingWriteBlocking();
+		// runEvio();
+		// runGnet();
 		runEpollFullNonblocking();
 	//
 	err != nil {
